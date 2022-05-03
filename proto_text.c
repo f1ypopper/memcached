@@ -2110,7 +2110,49 @@ static void process_arithmetic_command(conn *c, token_t *tokens, const size_t nt
     }
 }
 
+static void process_multiply_command(conn *c, token_t *tokens, const size_t ntokens) {
+    char temp[INCR_MAX_STORAGE_LEN];
+    uint64_t delta;
+    char *key;
+    size_t nkey;
 
+    assert(c != NULL);
+
+    set_noreply_maybe(c, tokens, ntokens);
+
+    if (tokens[KEY_TOKEN].length > KEY_MAX_LENGTH) {
+        out_string(c, "CLIENT_ERROR bad command line format");
+        return;
+    }
+
+    key = tokens[KEY_TOKEN].value;
+    nkey = tokens[KEY_TOKEN].length;
+
+    if (!safe_strtoull(tokens[2].value, &delta)) {
+        out_string(c, "CLIENT_ERROR invalid numeric delta argument");
+        return;
+    }
+
+    switch(mult_delta(c, key, nkey, delta, temp, NULL)) {
+    case OK:
+        out_string(c, temp);
+        break;
+    case NON_NUMERIC:
+        out_string(c, "CLIENT_ERROR cannot increment or decrement non-numeric value");
+        break;
+    case EOM:
+        out_of_memory(c, "SERVER_ERROR out of memory");
+        break;
+    case DELTA_ITEM_NOT_FOUND:
+        pthread_mutex_lock(&c->thread->stats.mutex);
+        c->thread->stats.mult_misses++;
+        pthread_mutex_unlock(&c->thread->stats.mutex);
+        out_string(c, "NOT_FOUND");
+        break;
+    case DELTA_ITEM_CAS_MISMATCH:
+        break; /* Should never get here */
+    }
+}
 static void process_delete_command(conn *c, token_t *tokens, const size_t ntokens) {
     char *key;
     size_t nkey;
@@ -2773,7 +2815,12 @@ void process_command_ascii(conn *c, char *command) {
                 out_string(c, "ERROR");
                 break;
         }
-    } else if (first == 'g') {
+    }else if(first == 'm'){
+        if(strcmp(tokens[COMMAND_TOKEN].value, "mult") == 0){
+            WANT_TOKENS_OR(ntokens, 4, 5);
+            process_multiply_command(c, tokens, ntokens);
+        }
+    }else if (first == 'g') {
         // Various get commands are very common.
         WANT_TOKENS_MIN(ntokens, 3);
         if (strcmp(tokens[COMMAND_TOKEN].value, "get") == 0) {
